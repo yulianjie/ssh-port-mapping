@@ -23,8 +23,13 @@ jobs:
           Copy-Item target/release/portweave.exe dist/PortWeave/
           Copy-Item README.md,LICENSE dist/PortWeave/
           Compress-Archive -Path dist/PortWeave -DestinationPath dist/PortWeave-windows-x86_64.zip
+          $hash = (Get-FileHash dist/PortWeave-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash *PortWeave-windows-x86_64.zip" | Set-Content dist/SHA256SUMS.txt -Encoding utf8NoBOM
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/PortWeave-windows-x86_64.zip
+          name: PortWeave ${{ github.ref_name }}
+          files: |
+            dist/PortWeave-windows-x86_64.zip
+            dist/SHA256SUMS.txt
           generate_release_notes: true

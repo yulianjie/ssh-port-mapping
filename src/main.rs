@@ -14,6 +14,7 @@ use iced::{
 use portweave::config::{AppConfig, ForwardKind, TunnelConfig, config_path};
 use portweave::ssh::{ProcessEvent, TunnelManager};
 use portweave::ssh_config::{SshConfigImport, SshConnection, import_default_ssh_config};
+use portweave::startup;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -89,6 +90,7 @@ enum Message {
     AutostartChanged(bool),
     MinimizeToTrayChanged(bool),
     StartMinimizedChanged(bool),
+    LaunchAtLoginChanged(bool),
     Quit,
 }
 
@@ -106,6 +108,8 @@ struct PortWeave {
     window_id: Option<window::Id>,
     initial_window_event_seen: bool,
     tray_available: bool,
+    launch_at_login_supported: bool,
+    launch_at_login: bool,
     pending_delete: Option<Uuid>,
     imported_connections: Vec<SshConnection>,
     import_source: Option<PathBuf>,
@@ -126,6 +130,12 @@ impl PortWeave {
         let banner = config_error.or_else(|| {
             tray_error.map(|error| format!("系统托盘不可用，关闭窗口将退出程序：{error}"))
         });
+        let launch_at_login_supported = startup::is_supported();
+        let (launch_at_login, startup_error) = match startup::is_enabled() {
+            Ok(enabled) => (enabled, None),
+            Err(error) => (false, Some(format!("无法读取开机启动状态：{error}"))),
+        };
+        let banner = banner.or(startup_error);
         let mut app = Self {
             config,
             config_path,
@@ -140,6 +150,8 @@ impl PortWeave {
             window_id: None,
             initial_window_event_seen: false,
             tray_available,
+            launch_at_login_supported,
+            launch_at_login,
             pending_delete: None,
             imported_connections: Vec::new(),
             import_source: None,
@@ -296,6 +308,17 @@ impl PortWeave {
                 self.config.start_minimized = value;
                 self.save_config();
             }
+            Message::LaunchAtLoginChanged(value) => match startup::set_enabled(value) {
+                Ok(()) => {
+                    self.launch_at_login = value;
+                    self.push_log(if value {
+                        "已启用 Windows 登录时自动启动 PortWeave。"
+                    } else {
+                        "已关闭 Windows 登录时自动启动 PortWeave。"
+                    });
+                }
+                Err(error) => self.banner = Some(error),
+            },
             Message::Quit => return self.quit(),
         }
         Task::none()
@@ -862,6 +885,13 @@ impl PortWeave {
     }
 
     fn settings_page(&self) -> Element<'_, Message> {
+        let launch_checkbox =
+            checkbox(self.launch_at_login).label("登录 Windows 时自动启动 PortWeave");
+        let launch_checkbox = if self.launch_at_login_supported {
+            launch_checkbox.on_toggle(Message::LaunchAtLoginChanged)
+        } else {
+            launch_checkbox
+        };
         let minimize_checkbox =
             checkbox(self.config.minimize_to_tray).label("关闭窗口后继续运行隧道");
         let minimize_checkbox = if self.tray_available {
@@ -879,8 +909,16 @@ impl PortWeave {
         let behavior = section(
             "应用行为",
             column![
+                launch_checkbox,
                 minimize_checkbox,
                 start_hidden_checkbox,
+                text(if self.launch_at_login_supported {
+                    "开机启动仅对当前 Windows 用户生效；移动程序后请重新关闭再开启此选项。"
+                } else {
+                    "当前系统尚不支持开机启动设置。"
+                })
+                .size(12)
+                .color(Color::from_rgb8(148, 163, 184)),
                 text(if self.tray_available {
                     "系统托盘已就绪。"
                 } else {

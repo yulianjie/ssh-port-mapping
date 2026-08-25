@@ -16,7 +16,8 @@ PortWeave 是一个轻量、现代的 Windows SSH 端口映射管理器。它使
 - 支持 `ProxyJump` / `ssh -J`，包括逗号分隔的多级跳板链
 - 一键启动、停止单个或全部隧道
 - 提供中文主界面、状态提示和系统托盘菜单
-- 自动启动指定隧道
+- 支持随 Windows 登录自动启动 PortWeave
+- PortWeave 启动后自动启动指定隧道
 - 关闭窗口后继续在系统托盘运行
 - 实时显示 SSH 错误和异常退出状态
 - 配置仅保存在本机 JSON 文件中
@@ -94,12 +95,23 @@ cargo run --release
 首次连接新服务器时，请先在终端中手动运行一次 `ssh user@host -p port`，核对并接受
 服务器主机密钥。PortWeave 使用 `BatchMode=yes`，不会弹出密码或主机密钥输入框。
 
+## 开机启动
+
+在 **设置 → 应用行为** 中启用 **登录 Windows 时自动启动 PortWeave**。该选项写入
+当前用户的 Windows 启动项，不需要管理员权限，也不会影响其他用户。若同时启用
+**启动时隐藏窗口**，PortWeave 会在登录后直接进入系统托盘。
+
+开机启动记录的是当前 `portweave.exe` 的完整路径。便携版解压后请先放到固定目录；
+如果之后移动了程序，请在新位置运行 PortWeave，并将开机启动选项关闭后重新开启。
+隧道编辑页中的 **PortWeave 启动时自动启动此隧道** 是独立设置，只有勾选的隧道
+才会在应用启动后建立连接。
+
 ## 数据与安全
 
 配置文件位于 Windows 用户配置目录：
 
 ```text
-%APPDATA%\PortWeave\PortWeave\config.json
+%APPDATA%\PortWeave\PortWeave\config\config.json
 ```
 
 - 不保存密码、口令、私钥内容或 SSH agent 凭证。
@@ -132,7 +144,7 @@ cargo tree | Select-String wgpu
 
 ## 当前范围
 
-0.2 版本聚焦 Windows 桌面使用。核心配置与 SSH 进程管理代码保持平台无关；macOS
+0.3 版本聚焦 Windows 桌面使用。核心配置与 SSH 进程管理代码保持平台无关；macOS
 已启用托盘依赖但尚未完成发布验收，Linux 托盘和窗口后端暂未打包。
 
 ## License

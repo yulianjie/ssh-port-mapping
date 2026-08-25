@@ -1,6 +1,6 @@
 [package]
 name = "portweave"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A lightweight desktop manager for SSH local and remote port forwarding"
@@ -19,6 +19,9 @@ uuid = { version = "1.18.1", features = ["v4", "serde"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 tray-icon = { version = "0.24.2", default-features = false }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.56.0"
 
 [profile.release]
 codegen-units = 1
