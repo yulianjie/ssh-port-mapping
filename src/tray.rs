@@ -21,14 +21,14 @@ mod platform {
 
     pub fn create() -> Result<TrayHandle, String> {
         let menu = Menu::new();
-        let show = MenuItem::with_id(SHOW_ID, "Open PortWeave", true, None);
-        let quit = MenuItem::with_id(QUIT_ID, "Quit", true, None);
+        let show = MenuItem::with_id(SHOW_ID, "打开 PortWeave", true, None);
+        let quit = MenuItem::with_id(QUIT_ID, "退出", true, None);
         menu.append_items(&[&show, &quit])
             .map_err(|error| error.to_string())?;
 
         let icon = create_icon()?;
         let tray = TrayIconBuilder::new()
-            .with_tooltip("PortWeave · SSH tunnels")
+            .with_tooltip("PortWeave · SSH 隧道")
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
@@ -92,7 +92,7 @@ pub struct TrayHandle;
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn create() -> Result<TrayHandle, String> {
-    Err("tray integration is currently supported on Windows and macOS".into())
+    Err("系统托盘目前仅支持 Windows 和 macOS".into())
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]

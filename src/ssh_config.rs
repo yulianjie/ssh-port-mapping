@@ -28,8 +28,7 @@ pub struct SshConfigImport {
 }
 
 pub fn import_default_ssh_config() -> Result<SshConfigImport, String> {
-    let user_dirs =
-        UserDirs::new().ok_or_else(|| "Could not locate your home directory".to_string())?;
+    let user_dirs = UserDirs::new().ok_or_else(|| "无法确定当前用户的主目录".to_string())?;
     let home_dir = user_dirs.home_dir();
     let config_path = home_dir.join(".ssh").join("config");
     import_ssh_config(&config_path, home_dir)
@@ -37,16 +36,13 @@ pub fn import_default_ssh_config() -> Result<SshConfigImport, String> {
 
 fn import_ssh_config(config_path: &Path, home_dir: &Path) -> Result<SshConfigImport, String> {
     if !config_path.is_file() {
-        return Err(format!(
-            "SSH config was not found at {}",
-            config_path.display()
-        ));
+        return Err(format!("未找到 SSH 配置文件：{}", config_path.display()));
     }
 
     let aliases = discover_host_aliases(config_path, home_dir)?;
     if aliases.is_empty() {
         return Err(format!(
-            "No concrete Host aliases were found in {}",
+            "SSH 配置文件中没有可导入的具体 Host 别名：{}",
             config_path.display()
         ));
     }
@@ -65,9 +61,7 @@ fn import_ssh_config(config_path: &Path, home_dir: &Path) -> Result<SshConfigImp
             .first()
             .map(|warning| format!(": {warning}"))
             .unwrap_or_default();
-        return Err(format!(
-            "OpenSSH could not resolve any Host aliases{details}"
-        ));
+        return Err(format!("OpenSSH 无法解析任何 Host 别名{details}"));
     }
 
     Ok(SshConfigImport {
@@ -110,14 +104,14 @@ fn discover_file(
     let canonical = match path.canonicalize() {
         Ok(path) => path,
         Err(error) if !required && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(format!("Could not open {}: {error}", path.display())),
+        Err(error) => return Err(format!("无法打开 {}：{error}", path.display())),
     };
     if !visited.insert(canonical.clone()) {
         return Ok(());
     }
 
     let contents = fs::read_to_string(&canonical)
-        .map_err(|error| format!("Could not read {}: {error}", canonical.display()))?;
+        .map_err(|error| format!("无法读取 {}：{error}", canonical.display()))?;
     for line in contents.lines() {
         let Some((keyword, values)) = parse_directive(line) else {
             continue;
@@ -207,7 +201,7 @@ fn split_words(value: &str) -> Vec<String> {
                 if characters.peek().is_some_and(|next| {
                     next.is_whitespace() || matches!(next, '\'' | '"' | '#' | '\\')
                 }) {
-                    current.push(characters.next().expect("peeked character must exist"));
+                    current.push(characters.next().expect("已确认下一个字符存在"));
                 } else {
                     current.push(character);
                 }
@@ -254,7 +248,7 @@ fn expand_include(
 
     let pattern = expanded.to_string_lossy();
     let mut matches = glob(&pattern)
-        .map_err(|error| format!("Invalid SSH Include pattern {pattern}: {error}"))?
+        .map_err(|error| format!("SSH Include 模式无效 {pattern}：{error}"))?
         .filter_map(Result::ok)
         .collect::<Vec<_>>();
     matches.sort();
@@ -274,18 +268,18 @@ fn resolve_connection(config_path: &Path, alias: &str) -> Result<SshConnection, 
 
     let output = command
         .output()
-        .map_err(|error| format!("Could not run OpenSSH: {error}"))?;
+        .map_err(|error| format!("无法运行 OpenSSH：{error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let message = stderr.trim();
         return Err(if message.is_empty() {
-            format!("ssh -G exited with {}", output.status)
+            format!("ssh -G 已退出，状态为 {}", output.status)
         } else {
             message.to_string()
         });
     }
     let output = String::from_utf8(output.stdout)
-        .map_err(|_| "OpenSSH returned connection data that is not UTF-8".to_string())?;
+        .map_err(|_| "OpenSSH 返回的连接数据不是有效的 UTF-8".to_string())?;
     parse_effective_config(alias, &output)
 }
 
@@ -313,8 +307,8 @@ fn parse_effective_config(alias: &str, output: &str) -> Result<SshConnection, St
     Ok(SshConnection {
         alias: alias.to_string(),
         host_name: host_name.unwrap_or_else(|| alias.to_string()),
-        user: user.ok_or_else(|| "OpenSSH did not return a user".to_string())?,
-        port: port.ok_or_else(|| "OpenSSH did not return a valid port".to_string())?,
+        user: user.ok_or_else(|| "OpenSSH 未返回用户名".to_string())?,
+        port: port.ok_or_else(|| "OpenSSH 未返回有效端口".to_string())?,
         proxy_jump,
     })
 }

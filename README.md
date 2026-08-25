@@ -15,6 +15,7 @@ PortWeave 是一个轻量、现代的 Windows SSH 端口映射管理器。它使
 - 从当前用户的 `~/.ssh/config` 导入连接，支持递归发现 `Include` 文件
 - 支持 `ProxyJump` / `ssh -J`，包括逗号分隔的多级跳板链
 - 一键启动、停止单个或全部隧道
+- 提供中文主界面、状态提示和系统托盘菜单
 - 自动启动指定隧道
 - 关闭窗口后继续在系统托盘运行
 - 实时显示 SSH 错误和异常退出状态
@@ -38,14 +39,14 @@ Host example-remote
 
 | 字段 | 值 |
 |---|---|
-| Name | `example-remote` |
-| Server | `203.0.113.10` |
-| User | `developer` |
-| SSH port | `2222` |
-| Jump hosts | `bastion` |
-| Direction | `Remote (-R)` |
-| Bind | `127.0.0.1:7897` |
-| Target | `127.0.0.1:7897` |
+| 名称 | `example-remote` |
+| 服务器 | `203.0.113.10` |
+| 用户名 | `developer` |
+| SSH 端口 | `2222` |
+| 跳板机 | `bastion` |
+| 方向 | `远程转发 (-R)` |
+| 监听 | `127.0.0.1:7897` |
+| 目标 | `127.0.0.1:7897` |
 
 应用实际执行等价于：
 
@@ -61,7 +62,7 @@ ssh -N -T -o ExitOnForwardFailure=yes -o BatchMode=yes `
 
 ## 从 SSH config 导入
 
-在隧道页点击 **Import SSH config**。PortWeave 会读取当前用户的
+在隧道页点击 **导入 SSH 配置**。PortWeave 会读取当前用户的
 `~/.ssh/config`，递归发现 `Include` 中的文件，并列出不含通配符的具体 `Host`
 别名。选择一个连接后，再填写本地或远程端口映射即可保存。
 
@@ -71,7 +72,7 @@ ssh -N -T -o ExitOnForwardFailure=yes -o BatchMode=yes `
 导入后若修改了 SSH config 中的用户、端口或跳板链，请重新导入或在 PortWeave 中
 同步编辑。
 
-也可以不导入，直接在编辑页的 **Jump hosts** 中填写 `bastion`、
+也可以不导入，直接在编辑页的 **跳板机（可选）** 中填写 `bastion`、
 `user@bastion:2222`，或 `bastion-1,bastion-2`。PortWeave 将整个值作为一个 `-J`
 参数传给 OpenSSH，不经过 shell 拼接。
 
@@ -131,7 +132,7 @@ cargo tree | Select-String wgpu
 
 ## 当前范围
 
-0.1 版本聚焦 Windows 桌面使用。核心配置与 SSH 进程管理代码保持平台无关；macOS
+0.2 版本聚焦 Windows 桌面使用。核心配置与 SSH 进程管理代码保持平台无关；macOS
 已启用托盘依赖但尚未完成发布验收，Linux 托盘和窗口后端暂未打包。
 
 ## License

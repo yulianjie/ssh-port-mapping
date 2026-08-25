@@ -120,13 +120,11 @@ impl PortWeave {
             Err(error) => (
                 AppConfig::default(),
                 config_path().unwrap_or_else(|_| PathBuf::from("portweave-config.json")),
-                Some(format!("Could not load the saved configuration: {error}")),
+                Some(format!("无法加载已保存的配置：{error}")),
             ),
         };
         let banner = config_error.or_else(|| {
-            tray_error.map(|error| {
-                format!("System tray is unavailable; closing the window will exit: {error}")
-            })
+            tray_error.map(|error| format!("系统托盘不可用，关闭窗口将退出程序：{error}"))
         });
         let mut app = Self {
             config,
@@ -188,7 +186,7 @@ impl PortWeave {
                 }
                 if matches!(event, window::Event::CloseRequested) {
                     if self.config.minimize_to_tray && self.tray_available {
-                        self.push_log("Window hidden. PortWeave is still running in the tray.");
+                        self.push_log("窗口已隐藏，PortWeave 仍在系统托盘中运行。");
                         return window::set_mode(id, window::Mode::Hidden);
                     }
                     return self.quit();
@@ -223,11 +221,11 @@ impl PortWeave {
                     .iter()
                     .find(|tunnel| tunnel.id == id)
                     .map(|tunnel| tunnel.name.clone())
-                    .unwrap_or_else(|| "Tunnel".into());
+                    .unwrap_or_else(|| "隧道".into());
                 self.config.tunnels.retain(|tunnel| tunnel.id != id);
                 self.errors.remove(&id);
                 self.save_config();
-                self.push_log(format!("Deleted “{name}”."));
+                self.push_log(format!("已删除“{name}”。"));
                 self.pending_delete = None;
             }
             Message::CancelDelete => self.pending_delete = None,
@@ -251,22 +249,18 @@ impl PortWeave {
                         self.imported_connections = import.connections;
                         self.page = Page::Import;
                         if import.warnings.is_empty() {
-                            self.push_log(format!(
-                                "Found {count} connection(s) in the OpenSSH config."
-                            ));
+                            self.push_log(format!("在 OpenSSH 配置中找到 {count} 个连接。"));
                         } else {
                             let skipped = import.warnings.len();
                             self.banner = Some(format!(
-                                "Found {count} connection(s); {skipped} Host alias(es) could not be resolved."
+                                "找到 {count} 个连接；另有 {skipped} 个 Host 别名无法解析。"
                             ));
                             for warning in import.warnings {
-                                self.push_log(format!("[SSH import] Skipped {warning}"));
+                                self.push_log(format!("[SSH 导入] 已跳过 {warning}"));
                             }
                         }
                     }
-                    Err(error) => {
-                        self.banner = Some(format!("Could not import SSH config: {error}"))
-                    }
+                    Err(error) => self.banner = Some(format!("无法导入 SSH 配置：{error}")),
                 }
             }
             Message::SelectImportedConnection(index) => {
@@ -321,13 +315,13 @@ impl PortWeave {
             let name = self.tunnel_name(id);
             match result {
                 Ok(code) => {
-                    let message = format!("SSH exited with code {code}");
+                    let message = format!("SSH 已退出，代码为 {code}");
                     self.errors.insert(id, message.clone());
-                    self.push_log(format!("[{name}] {message}."));
+                    self.push_log(format!("[{name}] {message}。"));
                 }
                 Err(error) => {
                     self.errors.insert(id, error.clone());
-                    self.push_log(format!("[{name}] Could not inspect SSH process: {error}"));
+                    self.push_log(format!("[{name}] 无法检查 SSH 进程：{error}"));
                 }
             }
         }
@@ -347,12 +341,12 @@ impl PortWeave {
         match self.manager.start(config, self.event_tx.clone()) {
             Ok(pid) => {
                 self.errors.remove(&id);
-                self.push_log(format!("[{name}] Started SSH process {pid}."));
+                self.push_log(format!("[{name}] 已启动 SSH 进程 {pid}。"));
             }
             Err(error) => {
                 self.errors.insert(id, error.clone());
-                self.banner = Some(format!("Could not start “{name}”: {error}"));
-                self.push_log(format!("[{name}] Start failed: {error}"));
+                self.banner = Some(format!("无法启动“{name}”：{error}"));
+                self.push_log(format!("[{name}] 启动失败：{error}"));
             }
         }
     }
@@ -360,11 +354,11 @@ impl PortWeave {
     fn stop_tunnel(&mut self, id: Uuid) {
         let name = self.tunnel_name(id);
         match self.manager.stop(id) {
-            Ok(true) => self.push_log(format!("[{name}] Stopped.")),
+            Ok(true) => self.push_log(format!("[{name}] 已停止。")),
             Ok(false) => {}
             Err(error) => {
                 self.banner = Some(error.clone());
-                self.push_log(format!("[{name}] Stop failed: {error}"));
+                self.push_log(format!("[{name}] 停止失败：{error}"));
             }
         }
     }
@@ -375,10 +369,7 @@ impl PortWeave {
                 let id = tunnel.id;
                 if self.manager.is_running(id) {
                     self.stop_tunnel(id);
-                    self.push_log(format!(
-                        "[{}] Stopped because its configuration changed.",
-                        tunnel.name
-                    ));
+                    self.push_log(format!("[{}] 配置已更改，因此已停止。", tunnel.name));
                 }
                 if let Some(existing) = self
                     .config
@@ -401,7 +392,7 @@ impl PortWeave {
 
     fn save_config(&mut self) {
         if let Err(error) = self.config.save(&self.config_path) {
-            self.banner = Some(format!("Could not save configuration: {error}"));
+            self.banner = Some(format!("无法保存配置：{error}"));
         }
     }
 
@@ -450,7 +441,7 @@ impl PortWeave {
             let banner = container(
                 row![
                     text(message).size(13).width(Fill),
-                    button("Dismiss")
+                    button("关闭")
                         .style(button::text)
                         .on_press(Message::DismissBanner)
                 ]
@@ -467,24 +458,24 @@ impl PortWeave {
     fn sidebar(&self) -> Element<'_, Message> {
         let brand = column![
             text("PORTWEAVE").size(20),
-            text("SSH tunnel manager")
+            text("SSH 隧道管理器")
                 .size(12)
                 .color(Color::from_rgb8(148, 163, 184))
         ]
         .spacing(3);
 
         let navigation = column![
-            nav_button("Tunnels", Page::Tunnels, self.page),
-            nav_button("Activity log", Page::Logs, self.page),
-            nav_button("Settings", Page::Settings, self.page),
+            nav_button("隧道", Page::Tunnels, self.page),
+            nav_button("活动日志", Page::Logs, self.page),
+            nav_button("设置", Page::Settings, self.page),
         ]
         .spacing(8);
 
         let status = column![
-            text(format!("{} active", self.manager.running_count()))
+            text(format!("{} 个正在运行", self.manager.running_count()))
                 .size(13)
                 .color(Color::from_rgb8(74, 222, 128)),
-            text(format!("{} configured", self.config.tunnels.len()))
+            text(format!("{} 个已配置", self.config.tunnels.len()))
                 .size(12)
                 .color(Color::from_rgb8(148, 163, 184)),
         ]
@@ -520,25 +511,22 @@ impl PortWeave {
 
     fn tunnels_page(&self) -> Element<'_, Message> {
         let controls = row![
-            self.page_header(
-                "SSH tunnels",
-                "Secure forwards managed by your system OpenSSH"
-            ),
+            self.page_header("SSH 隧道", "使用系统 OpenSSH 管理安全的端口转发"),
             row![
-                button("Start all")
+                button("全部启动")
                     .style(button::secondary)
                     .on_press(Message::StartAll),
-                button("Stop all")
+                button("全部停止")
                     .style(button::secondary)
                     .on_press(Message::StopAll),
                 if self.importing {
-                    button("Importing SSH config…").style(button::secondary)
+                    button("正在导入 SSH 配置…").style(button::secondary)
                 } else {
-                    button("Import SSH config")
+                    button("导入 SSH 配置")
                         .style(button::secondary)
                         .on_press(Message::ImportSshConfig)
                 },
-                button("+ New tunnel")
+                button("+ 新建隧道")
                     .style(button::primary)
                     .on_press(Message::NewTunnel),
             ]
@@ -551,10 +539,10 @@ impl PortWeave {
         let list: Element<'_, Message> = if self.config.tunnels.is_empty() {
             container(
                 column![
-                    text("No tunnels yet").size(22),
-                    text("Create a remote or local port forward in a few fields.")
+                    text("还没有隧道").size(22),
+                    text("填写少量字段即可创建远程或本地端口转发。")
                         .color(Color::from_rgb8(148, 163, 184)),
-                    button("Create the first tunnel")
+                    button("创建第一个隧道")
                         .style(button::primary)
                         .on_press(Message::NewTunnel)
                 ]
@@ -586,23 +574,23 @@ impl PortWeave {
         let (status, status_color) = if running {
             (
                 format!(
-                    "RUNNING · PID {}",
+                    "运行中 · PID {}",
                     self.manager.pid(tunnel.id).unwrap_or_default()
                 ),
                 Color::from_rgb8(74, 222, 128),
             )
         } else if self.errors.contains_key(&tunnel.id) {
-            ("NEEDS ATTENTION".into(), Color::from_rgb8(248, 113, 113))
+            ("需要处理".into(), Color::from_rgb8(248, 113, 113))
         } else {
-            ("STOPPED".into(), Color::from_rgb8(148, 163, 184))
+            ("已停止".into(), Color::from_rgb8(148, 163, 184))
         };
 
         let action = if running {
-            button("Stop")
+            button("停止")
                 .style(button::danger)
                 .on_press(Message::Stop(tunnel.id))
         } else {
-            button("Start")
+            button("启动")
                 .style(button::primary)
                 .on_press(Message::Start(tunnel.id))
         };
@@ -611,24 +599,24 @@ impl PortWeave {
         if self.pending_delete == Some(tunnel.id) {
             actions = actions
                 .push(
-                    button("Confirm delete")
+                    button("确认删除")
                         .style(button::danger)
                         .on_press(Message::ConfirmDelete(tunnel.id)),
                 )
                 .push(
-                    button("Cancel")
+                    button("取消")
                         .style(button::text)
                         .on_press(Message::CancelDelete),
                 );
         } else {
             actions = actions
                 .push(
-                    button("Edit")
+                    button("编辑")
                         .style(button::secondary)
                         .on_press(Message::Edit(tunnel.id)),
                 )
                 .push(
-                    button("Delete")
+                    button("删除")
                         .style(button::text)
                         .on_press(Message::RequestDelete(tunnel.id)),
                 );
@@ -648,13 +636,13 @@ impl PortWeave {
 
         let destination = tunnel.destination();
         let mapping = tunnel.mapping();
-        let jump = tunnel.proxy_jump.as_deref().unwrap_or("Direct");
+        let jump = tunnel.proxy_jump.as_deref().unwrap_or("直连");
         let details = row![
-            detail("SERVER", destination),
-            detail("VIA", jump),
-            detail("MODE", tunnel.kind.label()),
-            detail("MAPPING", mapping),
-            detail("AUTO-START", if tunnel.autostart { "On" } else { "Off" }),
+            detail("服务器", destination),
+            detail("连接方式", jump),
+            detail("模式", tunnel.kind.label()),
+            detail("端口映射", mapping),
+            detail("自动启动", if tunnel.autostart { "开" } else { "关" }),
         ]
         .spacing(30);
 
@@ -672,34 +660,34 @@ impl PortWeave {
 
     fn editor_page(&self) -> Element<'_, Message> {
         let title = if self.form.editing.is_some() {
-            "Edit tunnel"
+            "编辑隧道"
         } else {
-            "New tunnel"
+            "新建隧道"
         };
         let subtitle = match self.form.kind {
-            ForwardKind::Remote => "Expose a local service on the remote SSH server",
-            ForwardKind::Local => "Reach a remote service through a local listening port",
+            ForwardKind::Remote => "将本地服务暴露到远程 SSH 服务器",
+            ForwardKind::Local => "通过本地监听端口访问远程服务",
         };
 
         let connection = section(
-            "SSH connection",
+            "SSH 连接",
             column![
                 field(
-                    "Name",
-                    text_input("e.g. example-remote", &self.form.name)
+                    "名称",
+                    text_input("例如：example-remote", &self.form.name)
                         .on_input(Message::NameChanged)
                 ),
                 row![
                     field(
-                        "Server",
+                        "服务器",
                         text_input("203.0.113.10", &self.form.host).on_input(Message::HostChanged)
                     ),
                     field(
-                        "User",
+                        "用户名",
                         text_input("developer", &self.form.user).on_input(Message::UserChanged)
                     ),
                     field(
-                        "SSH port",
+                        "SSH 端口",
                         text_input("2222", &self.form.ssh_port)
                             .on_input(Message::SshPortChanged)
                             .width(Length::Fixed(150.0))
@@ -707,19 +695,19 @@ impl PortWeave {
                 ]
                 .spacing(12),
                 field(
-                    "Identity file (optional)",
+                    "私钥文件（可选）",
                     text_input("C:\\Users\\you\\.ssh\\id_ed25519", &self.form.identity_file,)
                         .on_input(Message::IdentityFileChanged)
                 ),
                 field(
-                    "Jump hosts (optional)",
+                    "跳板机（可选）",
                     text_input(
-                        "bastion or bastion,ops@edge.example:2222",
+                        "bastion 或 bastion,ops@edge.example:2222",
                         &self.form.proxy_jump,
                     )
                     .on_input(Message::ProxyJumpChanged)
                 ),
-                text("Imported Host aliases continue to use matching options from ~/.ssh/config. Jump chains use OpenSSH ProxyJump syntax.")
+                text("导入的 Host 别名会继续使用 ~/.ssh/config 中的匹配选项；跳板机链使用 OpenSSH ProxyJump 语法。")
                     .size(12)
                     .color(Color::from_rgb8(148, 163, 184)),
             ]
@@ -727,34 +715,32 @@ impl PortWeave {
         );
 
         let mapping = section(
-            "Port mapping",
+            "端口映射",
             column![
                 column![
-                    text("Direction")
-                        .size(12)
-                        .color(Color::from_rgb8(148, 163, 184)),
+                    text("方向").size(12).color(Color::from_rgb8(148, 163, 184)),
                     pick_list(ForwardKind::ALL, Some(self.form.kind), Message::KindChanged)
                         .width(Fill)
                 ]
                 .spacing(6),
                 row![
                     field(
-                        "Bind address",
+                        "监听地址",
                         text_input("127.0.0.1", &self.form.bind_address)
                             .on_input(Message::BindAddressChanged)
                     ),
                     field(
-                        "Bind port",
+                        "监听端口",
                         text_input("7897", &self.form.bind_port).on_input(Message::BindPortChanged)
                     ),
                     text("→").size(22),
                     field(
-                        "Target host",
+                        "目标地址",
                         text_input("127.0.0.1", &self.form.target_host)
                             .on_input(Message::TargetHostChanged)
                     ),
                     field(
-                        "Target port",
+                        "目标端口",
                         text_input("7897", &self.form.target_port)
                             .on_input(Message::TargetPortChanged)
                     ),
@@ -762,7 +748,7 @@ impl PortWeave {
                 .spacing(12)
                 .align_y(Alignment::Center),
                 checkbox(self.form.autostart)
-                    .label("Start this tunnel when PortWeave launches")
+                    .label("PortWeave 启动时自动启动此隧道")
                     .on_toggle(Message::AutostartChanged),
             ]
             .spacing(14),
@@ -774,10 +760,10 @@ impl PortWeave {
         }
         form = form.push(
             row![
-                button("Cancel")
+                button("取消")
                     .style(button::secondary)
                     .on_press(Message::CancelEdit),
-                button("Save tunnel")
+                button("保存隧道")
                     .style(button::primary)
                     .on_press(Message::SaveTunnel),
             ]
@@ -795,10 +781,10 @@ impl PortWeave {
             .unwrap_or_else(|| "~/.ssh/config".into());
         let header = row![
             self.page_header(
-                "Import SSH connection",
-                "Choose a concrete Host alias, then complete its port mapping"
+                "导入 SSH 连接",
+                "选择一个具体的 Host 别名，然后补充端口映射"
             ),
-            button("Cancel")
+            button("取消")
                 .style(button::secondary)
                 .on_press(Message::CancelImport),
         ]
@@ -806,7 +792,7 @@ impl PortWeave {
         .align_y(Alignment::Center);
 
         let mut connections = column![
-            text(format!("Source: {source}"))
+            text(format!("来源：{source}"))
                 .size(12)
                 .color(Color::from_rgb8(148, 163, 184))
         ]
@@ -815,8 +801,8 @@ impl PortWeave {
             let route = connection
                 .proxy_jump
                 .as_deref()
-                .map(|jump| format!("Via {jump}"))
-                .unwrap_or_else(|| "Direct connection".into());
+                .map(|jump| format!("通过 {jump}"))
+                .unwrap_or_else(|| "直接连接".into());
             connections = connections.push(
                 container(
                     row![
@@ -829,7 +815,7 @@ impl PortWeave {
                         ]
                         .spacing(5)
                         .width(Fill),
-                        button("Use connection")
+                        button("使用此连接")
                             .style(button::primary)
                             .on_press(Message::SelectImportedConnection(index)),
                     ]
@@ -851,9 +837,8 @@ impl PortWeave {
     fn logs_page(&self) -> Element<'_, Message> {
         let mut lines = column![].spacing(8);
         if self.logs.is_empty() {
-            lines = lines.push(
-                text("Tunnel activity will appear here.").color(Color::from_rgb8(148, 163, 184)),
-            );
+            lines =
+                lines.push(text("隧道活动将显示在这里。").color(Color::from_rgb8(148, 163, 184)));
         } else {
             for line in self.logs.iter().rev() {
                 lines = lines.push(text(line).size(13));
@@ -861,7 +846,7 @@ impl PortWeave {
         }
         container(
             column![
-                self.page_header("Activity log", "The latest 500 events from this session"),
+                self.page_header("活动日志", "本次会话最近的 500 条事件"),
                 container(scrollable(lines).height(Fill))
                     .padding(18)
                     .height(Fill)
@@ -877,15 +862,14 @@ impl PortWeave {
     }
 
     fn settings_page(&self) -> Element<'_, Message> {
-        let minimize_checkbox = checkbox(self.config.minimize_to_tray)
-            .label("Keep tunnels running when the window is closed");
+        let minimize_checkbox =
+            checkbox(self.config.minimize_to_tray).label("关闭窗口后继续运行隧道");
         let minimize_checkbox = if self.tray_available {
             minimize_checkbox.on_toggle(Message::MinimizeToTrayChanged)
         } else {
             minimize_checkbox
         };
-        let start_hidden_checkbox =
-            checkbox(self.config.start_minimized).label("Start with the window hidden");
+        let start_hidden_checkbox = checkbox(self.config.start_minimized).label("启动时隐藏窗口");
         let start_hidden_checkbox = if self.tray_available {
             start_hidden_checkbox.on_toggle(Message::StartMinimizedChanged)
         } else {
@@ -893,14 +877,14 @@ impl PortWeave {
         };
 
         let behavior = section(
-            "App behavior",
+            "应用行为",
             column![
                 minimize_checkbox,
                 start_hidden_checkbox,
                 text(if self.tray_available {
-                    "Tray integration is ready."
+                    "系统托盘已就绪。"
                 } else {
-                    "Tray integration is unavailable on this system."
+                    "此系统不支持托盘集成。"
                 })
                 .size(12)
                 .color(Color::from_rgb8(148, 163, 184)),
@@ -909,13 +893,13 @@ impl PortWeave {
         );
 
         let storage = section(
-            "Local data",
+            "本地数据",
             column![
-                text("Configuration file")
+                text("配置文件")
                     .size(12)
                     .color(Color::from_rgb8(148, 163, 184)),
                 text(self.config_path.display().to_string()).size(13),
-                text("Passwords and private keys are never stored. Authentication is delegated to OpenSSH, your key files, and ssh-agent.")
+                text("不会存储密码或私钥内容。身份验证由 OpenSSH、您的密钥文件和 ssh-agent 处理。")
                     .size(13)
                     .color(Color::from_rgb8(148, 163, 184)),
             ]
@@ -923,13 +907,13 @@ impl PortWeave {
         );
 
         let about = section(
-            "About",
+            "关于",
             column![
                 text(format!("PortWeave {}", env!("CARGO_PKG_VERSION"))).size(16),
-                text("Iced 0.14 · tiny-skia renderer · system OpenSSH")
+                text("Iced 0.14 · tiny-skia 渲染器 · 系统 OpenSSH")
                     .size(13)
                     .color(Color::from_rgb8(148, 163, 184)),
-                button("Quit PortWeave")
+                button("退出 PortWeave")
                     .style(button::danger)
                     .on_press(Message::Quit),
             ]
@@ -938,7 +922,7 @@ impl PortWeave {
 
         container(
             column![
-                self.page_header("Settings", "Lightweight by design, private by default"),
+                self.page_header("设置", "轻量设计，默认保护隐私"),
                 behavior,
                 storage,
                 about
@@ -1031,7 +1015,7 @@ impl TunnelForm {
                 .parse::<u16>()
                 .ok()
                 .filter(|port| *port > 0)
-                .ok_or_else(|| format!("{label} must be between 1 and 65535"))
+                .ok_or_else(|| format!("{label}必须介于 1 到 65535 之间"))
         };
         let identity_file = (!self.identity_file.trim().is_empty())
             .then(|| PathBuf::from(self.identity_file.trim()));
@@ -1042,12 +1026,12 @@ impl TunnelForm {
             name: self.name.trim().into(),
             host: self.host.trim().into(),
             user: self.user.trim().into(),
-            ssh_port: parse_port("SSH port", &self.ssh_port)?,
+            ssh_port: parse_port("SSH 端口", &self.ssh_port)?,
             kind: self.kind,
             bind_address: self.bind_address.trim().into(),
-            bind_port: parse_port("Bind port", &self.bind_port)?,
+            bind_port: parse_port("监听端口", &self.bind_port)?,
             target_host: self.target_host.trim().into(),
-            target_port: parse_port("Target port", &self.target_port)?,
+            target_port: parse_port("目标端口", &self.target_port)?,
             identity_file,
             proxy_jump,
             autostart: self.autostart,

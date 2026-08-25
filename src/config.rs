@@ -28,8 +28,8 @@ impl ForwardKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Remote => "Remote (-R)",
-            Self::Local => "Local (-L)",
+            Self::Remote => "远程转发 (-R)",
+            Self::Local => "本地转发 (-L)",
         }
     }
 }
@@ -78,24 +78,24 @@ impl TunnelConfig {
 
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
-            return Err("Name is required".into());
+            return Err("请输入名称".into());
         }
         if self.host.trim().is_empty() {
-            return Err("Server host is required".into());
+            return Err("请输入服务器地址".into());
         }
         if self.user.trim().is_empty() {
-            return Err("SSH user is required".into());
+            return Err("请输入 SSH 用户名".into());
         }
-        validate_destination_part("Server host", &self.host, false)?;
-        validate_destination_part("SSH user", &self.user, true)?;
+        validate_destination_part("服务器地址", &self.host, false)?;
+        validate_destination_part("SSH 用户名", &self.user, true)?;
         if self.bind_address.trim().is_empty() {
-            return Err("Bind address is required".into());
+            return Err("请输入监听地址".into());
         }
         if self.target_host.trim().is_empty() {
-            return Err("Target host is required".into());
+            return Err("请输入目标地址".into());
         }
         if self.ssh_port == 0 || self.bind_port == 0 || self.target_port == 0 {
-            return Err("Ports must be between 1 and 65535".into());
+            return Err("端口必须介于 1 到 65535 之间".into());
         }
         if let Some(proxy_jump) = self.proxy_jump.as_deref() {
             validate_proxy_jump(proxy_jump)?;
@@ -109,7 +109,7 @@ fn validate_destination_part(label: &str, value: &str, reject_at: bool) -> Resul
         || value.chars().any(char::is_whitespace)
         || (reject_at && value.contains('@'))
     {
-        return Err(format!("{label} contains unsupported characters"));
+        return Err(format!("{label}包含不支持的字符"));
     }
     Ok(())
 }
@@ -121,7 +121,7 @@ fn validate_proxy_jump(value: &str) -> Result<(), String> {
             .split(',')
             .any(|hop| hop.is_empty() || hop.starts_with('-'))
     {
-        return Err("Jump hosts must be a comma-separated list without spaces".into());
+        return Err("跳板机必须使用英文逗号分隔，且不能包含空格".into());
     }
     Ok(())
 }
@@ -179,11 +179,9 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoConfigDirectory => {
-                formatter.write_str("unable to resolve the config directory")
-            }
-            Self::Io(error) => write!(formatter, "configuration I/O error: {error}"),
-            Self::Json(error) => write!(formatter, "invalid configuration: {error}"),
+            Self::NoConfigDirectory => formatter.write_str("无法确定配置目录"),
+            Self::Io(error) => write!(formatter, "配置文件 I/O 错误：{error}"),
+            Self::Json(error) => write!(formatter, "配置文件格式无效：{error}"),
         }
     }
 }
@@ -250,24 +248,18 @@ mod tests {
         let mut tunnel = sample();
         assert!(tunnel.validate().is_ok());
         tunnel.host.clear();
-        assert_eq!(tunnel.validate().unwrap_err(), "Server host is required");
+        assert_eq!(tunnel.validate().unwrap_err(), "请输入服务器地址");
     }
 
     #[test]
     fn rejects_destination_values_that_could_be_parsed_as_options() {
         let mut tunnel = sample();
         tunnel.host = "-oProxyCommand=bad".into();
-        assert_eq!(
-            tunnel.validate().unwrap_err(),
-            "Server host contains unsupported characters"
-        );
+        assert_eq!(tunnel.validate().unwrap_err(), "服务器地址包含不支持的字符");
 
         tunnel.host = "example.com".into();
         tunnel.user = "name@example".into();
-        assert_eq!(
-            tunnel.validate().unwrap_err(),
-            "SSH user contains unsupported characters"
-        );
+        assert_eq!(tunnel.validate().unwrap_err(), "SSH 用户名包含不支持的字符");
     }
 
     #[test]
@@ -279,7 +271,7 @@ mod tests {
         tunnel.proxy_jump = Some("bastion, -oBad=yes".into());
         assert_eq!(
             tunnel.validate().unwrap_err(),
-            "Jump hosts must be a comma-separated list without spaces"
+            "跳板机必须使用英文逗号分隔，且不能包含空格"
         );
     }
 }

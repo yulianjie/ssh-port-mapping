@@ -51,7 +51,7 @@ impl TunnelManager {
 
         let mut child = command
             .spawn()
-            .map_err(|error| format!("Could not start OpenSSH: {error}"))?;
+            .map_err(|error| format!("无法启动 OpenSSH：{error}"))?;
         let pid = child.id();
 
         if let Some(stderr) = child.stderr.take() {
@@ -82,7 +82,7 @@ impl TunnelManager {
         running
             .child
             .kill()
-            .map_err(|error| format!("Could not stop tunnel: {error}"))?;
+            .map_err(|error| format!("无法停止隧道：{error}"))?;
         let _ = running.child.wait();
         Ok(true)
     }
