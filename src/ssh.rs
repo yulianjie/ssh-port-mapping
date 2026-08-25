@@ -156,6 +156,10 @@ pub fn command_args(config: &TunnelConfig) -> Vec<OsString> {
         args.push(OsString::from("-i"));
         args.push(identity_file.as_os_str().to_owned());
     }
+    if let Some(proxy_jump) = config.proxy_jump.as_ref() {
+        args.push(OsString::from("-J"));
+        args.push(OsString::from(proxy_jump));
+    }
     args.push(OsString::from(config.kind.ssh_flag()));
     args.push(OsString::from(mapping));
     args.push(OsString::from(format!("{}@{}", config.user, config.host)));
@@ -181,6 +185,7 @@ mod tests {
             target_host: "127.0.0.1".into(),
             target_port: 7897,
             identity_file: None,
+            proxy_jump: None,
             autostart: false,
         }
     }
@@ -215,6 +220,18 @@ mod tests {
         assert!(
             args.windows(2)
                 .any(|pair| pair == ["-L", "127.0.0.1:7897:127.0.0.1:7897"])
+        );
+    }
+
+    #[test]
+    fn builds_proxy_jump_chain_as_one_argument() {
+        let mut config = remote_config();
+        config.proxy_jump = Some("bastion,ops@edge.example:2202".into());
+        let args = command_args(&config);
+        let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-J", "bastion,ops@edge.example:2202"])
         );
     }
 }

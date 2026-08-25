@@ -58,6 +58,8 @@ pub struct TunnelConfig {
     pub target_port: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_jump: Option<String>,
     #[serde(default)]
     pub autostart: bool,
 }
@@ -95,6 +97,9 @@ impl TunnelConfig {
         if self.ssh_port == 0 || self.bind_port == 0 || self.target_port == 0 {
             return Err("Ports must be between 1 and 65535".into());
         }
+        if let Some(proxy_jump) = self.proxy_jump.as_deref() {
+            validate_proxy_jump(proxy_jump)?;
+        }
         Ok(())
     }
 }
@@ -105,6 +110,18 @@ fn validate_destination_part(label: &str, value: &str, reject_at: bool) -> Resul
         || (reject_at && value.contains('@'))
     {
         return Err(format!("{label} contains unsupported characters"));
+    }
+    Ok(())
+}
+
+fn validate_proxy_jump(value: &str) -> Result<(), String> {
+    if value.trim().is_empty()
+        || value.chars().any(char::is_whitespace)
+        || value
+            .split(',')
+            .any(|hop| hop.is_empty() || hop.starts_with('-'))
+    {
+        return Err("Jump hosts must be a comma-separated list without spaces".into());
     }
     Ok(())
 }
@@ -212,6 +229,7 @@ mod tests {
             target_host: "127.0.0.1".into(),
             target_port: 7897,
             identity_file: None,
+            proxy_jump: None,
             autostart: false,
         }
     }
@@ -249,6 +267,19 @@ mod tests {
         assert_eq!(
             tunnel.validate().unwrap_err(),
             "SSH user contains unsupported characters"
+        );
+    }
+
+    #[test]
+    fn validates_proxy_jump_chains() {
+        let mut tunnel = sample();
+        tunnel.proxy_jump = Some("bastion,ops@edge.example:2222".into());
+        assert!(tunnel.validate().is_ok());
+
+        tunnel.proxy_jump = Some("bastion, -oBad=yes".into());
+        assert_eq!(
+            tunnel.validate().unwrap_err(),
+            "Jump hosts must be a comma-separated list without spaces"
         );
     }
 }

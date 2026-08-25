@@ -12,6 +12,8 @@ PortWeave 是一个轻量、现代的 Windows SSH 端口映射管理器。它使
 
 - 支持远程转发 `RemoteForward` / `ssh -R`
 - 支持本地转发 `LocalForward` / `ssh -L`
+- 从当前用户的 `~/.ssh/config` 导入连接，支持递归发现 `Include` 文件
+- 支持 `ProxyJump` / `ssh -J`，包括逗号分隔的多级跳板链
 - 一键启动、停止单个或全部隧道
 - 自动启动指定隧道
 - 关闭窗口后继续在系统托盘运行
@@ -28,6 +30,7 @@ Host example-remote
   HostName 203.0.113.10
   User developer
   Port 2222
+  ProxyJump bastion
   RemoteForward 127.0.0.1:7897 127.0.0.1:7897
 ```
 
@@ -39,6 +42,7 @@ Host example-remote
 | Server | `203.0.113.10` |
 | User | `developer` |
 | SSH port | `2222` |
+| Jump hosts | `bastion` |
 | Direction | `Remote (-R)` |
 | Bind | `127.0.0.1:7897` |
 | Target | `127.0.0.1:7897` |
@@ -48,11 +52,28 @@ Host example-remote
 ```powershell
 ssh -N -T -o ExitOnForwardFailure=yes -o BatchMode=yes `
   -o ServerAliveInterval=30 -o ServerAliveCountMax=3 `
-  -p 2222 -R 127.0.0.1:7897:127.0.0.1:7897 developer@203.0.113.10
+  -p 2222 -J bastion `
+  -R 127.0.0.1:7897:127.0.0.1:7897 developer@203.0.113.10
 ```
 
 `203.0.113.10` 属于 RFC 5737 文档专用地址，请在本机界面中填写真实服务器信息；
 不要把真实基础设施配置提交到 Git。
+
+## 从 SSH config 导入
+
+在隧道页点击 **Import SSH config**。PortWeave 会读取当前用户的
+`~/.ssh/config`，递归发现 `Include` 中的文件，并列出不含通配符的具体 `Host`
+别名。选择一个连接后，再填写本地或远程端口映射即可保存。
+
+连接参数通过 `ssh -G -F <config> <alias>` 交给系统 OpenSSH 解析，因此
+`HostName`、`User`、`Port` 和 `ProxyJump` 会遵循 OpenSSH 的实际匹配结果。保存时
+仍保留 `Host` 别名，使该别名下的 `IdentityFile` 等认证设置继续由 OpenSSH 管理；
+导入后若修改了 SSH config 中的用户、端口或跳板链，请重新导入或在 PortWeave 中
+同步编辑。
+
+也可以不导入，直接在编辑页的 **Jump hosts** 中填写 `bastion`、
+`user@bastion:2222`，或 `bastion-1,bastion-2`。PortWeave 将整个值作为一个 `-J`
+参数传给 OpenSSH，不经过 shell 拼接。
 
 ## 运行
 
@@ -83,6 +104,7 @@ cargo run --release
 - 不保存密码、口令、私钥内容或 SSH agent 凭证。
 - 私钥字段只保存用户选择的本地文件路径。
 - SSH 参数通过 `Command` 参数数组传递，不经过 shell 拼接。
+- SSH config 导入只保存连接字段和本地私钥路径引用，不复制私钥内容。
 - 默认绑定地址为 `127.0.0.1`，避免无意暴露到所有网络接口。
 - 远程转发是否能绑定非回环地址仍受服务器 `GatewayPorts` 设置约束。
 - 退出应用时会停止所有由本次 PortWeave 会话创建的 SSH 子进程。

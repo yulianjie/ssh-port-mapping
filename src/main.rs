@@ -13,6 +13,7 @@ use iced::{
 };
 use portweave::config::{AppConfig, ForwardKind, TunnelConfig, config_path};
 use portweave::ssh::{ProcessEvent, TunnelManager};
+use portweave::ssh_config::{SshConfigImport, SshConnection, import_default_ssh_config};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -50,6 +51,7 @@ enum Page {
     Logs,
     Settings,
     Editor,
+    Import,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +68,10 @@ enum Message {
     ConfirmDelete(Uuid),
     CancelDelete,
     NewTunnel,
+    ImportSshConfig,
+    SshConfigImported(Result<SshConfigImport, String>),
+    SelectImportedConnection(usize),
+    CancelImport,
     SaveTunnel,
     CancelEdit,
     DismissBanner,
@@ -79,6 +85,7 @@ enum Message {
     TargetHostChanged(String),
     TargetPortChanged(String),
     IdentityFileChanged(String),
+    ProxyJumpChanged(String),
     AutostartChanged(bool),
     MinimizeToTrayChanged(bool),
     StartMinimizedChanged(bool),
@@ -100,6 +107,9 @@ struct PortWeave {
     initial_window_event_seen: bool,
     tray_available: bool,
     pending_delete: Option<Uuid>,
+    imported_connections: Vec<SshConnection>,
+    import_source: Option<PathBuf>,
+    importing: bool,
 }
 
 impl PortWeave {
@@ -133,6 +143,9 @@ impl PortWeave {
             initial_window_event_seen: false,
             tray_available,
             pending_delete: None,
+            imported_connections: Vec::new(),
+            import_source: None,
+            importing: false,
         };
 
         let autostart_ids: Vec<_> = app
@@ -222,6 +235,47 @@ impl PortWeave {
                 self.form = TunnelForm::default();
                 self.page = Page::Editor;
             }
+            Message::ImportSshConfig => {
+                self.importing = true;
+                return Task::perform(
+                    async { import_default_ssh_config() },
+                    Message::SshConfigImported,
+                );
+            }
+            Message::SshConfigImported(result) => {
+                self.importing = false;
+                match result {
+                    Ok(import) => {
+                        let count = import.connections.len();
+                        self.import_source = Some(import.config_path);
+                        self.imported_connections = import.connections;
+                        self.page = Page::Import;
+                        if import.warnings.is_empty() {
+                            self.push_log(format!(
+                                "Found {count} connection(s) in the OpenSSH config."
+                            ));
+                        } else {
+                            let skipped = import.warnings.len();
+                            self.banner = Some(format!(
+                                "Found {count} connection(s); {skipped} Host alias(es) could not be resolved."
+                            ));
+                            for warning in import.warnings {
+                                self.push_log(format!("[SSH import] Skipped {warning}"));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.banner = Some(format!("Could not import SSH config: {error}"))
+                    }
+                }
+            }
+            Message::SelectImportedConnection(index) => {
+                if let Some(connection) = self.imported_connections.get(index) {
+                    self.form = TunnelForm::from_ssh_connection(connection);
+                    self.page = Page::Editor;
+                }
+            }
+            Message::CancelImport => self.page = Page::Tunnels,
             Message::SaveTunnel => self.save_tunnel(),
             Message::CancelEdit => {
                 self.form = TunnelForm::default();
@@ -238,6 +292,7 @@ impl PortWeave {
             Message::TargetHostChanged(value) => self.form.target_host = value,
             Message::TargetPortChanged(value) => self.form.target_port = digits_only(value),
             Message::IdentityFileChanged(value) => self.form.identity_file = value,
+            Message::ProxyJumpChanged(value) => self.form.proxy_jump = value,
             Message::AutostartChanged(value) => self.form.autostart = value,
             Message::MinimizeToTrayChanged(value) => {
                 self.config.minimize_to_tray = value;
@@ -387,6 +442,7 @@ impl PortWeave {
             Page::Logs => self.logs_page(),
             Page::Settings => self.settings_page(),
             Page::Editor => self.editor_page(),
+            Page::Import => self.import_page(),
         };
 
         let mut content = column![body].width(Fill).height(Fill);
@@ -475,6 +531,13 @@ impl PortWeave {
                 button("Stop all")
                     .style(button::secondary)
                     .on_press(Message::StopAll),
+                if self.importing {
+                    button("Importing SSH config…").style(button::secondary)
+                } else {
+                    button("Import SSH config")
+                        .style(button::secondary)
+                        .on_press(Message::ImportSshConfig)
+                },
                 button("+ New tunnel")
                     .style(button::primary)
                     .on_press(Message::NewTunnel),
@@ -585,8 +648,10 @@ impl PortWeave {
 
         let destination = tunnel.destination();
         let mapping = tunnel.mapping();
+        let jump = tunnel.proxy_jump.as_deref().unwrap_or("Direct");
         let details = row![
             detail("SERVER", destination),
+            detail("VIA", jump),
             detail("MODE", tunnel.kind.label()),
             detail("MAPPING", mapping),
             detail("AUTO-START", if tunnel.autostart { "On" } else { "Off" }),
@@ -646,6 +711,17 @@ impl PortWeave {
                     text_input("C:\\Users\\you\\.ssh\\id_ed25519", &self.form.identity_file,)
                         .on_input(Message::IdentityFileChanged)
                 ),
+                field(
+                    "Jump hosts (optional)",
+                    text_input(
+                        "bastion or bastion,ops@edge.example:2222",
+                        &self.form.proxy_jump,
+                    )
+                    .on_input(Message::ProxyJumpChanged)
+                ),
+                text("Imported Host aliases continue to use matching options from ~/.ssh/config. Jump chains use OpenSSH ProxyJump syntax.")
+                    .size(12)
+                    .color(Color::from_rgb8(148, 163, 184)),
             ]
             .spacing(14),
         );
@@ -709,6 +785,67 @@ impl PortWeave {
         );
 
         scrollable(container(form).padding(30).max_width(900)).into()
+    }
+
+    fn import_page(&self) -> Element<'_, Message> {
+        let source = self
+            .import_source
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "~/.ssh/config".into());
+        let header = row![
+            self.page_header(
+                "Import SSH connection",
+                "Choose a concrete Host alias, then complete its port mapping"
+            ),
+            button("Cancel")
+                .style(button::secondary)
+                .on_press(Message::CancelImport),
+        ]
+        .spacing(20)
+        .align_y(Alignment::Center);
+
+        let mut connections = column![
+            text(format!("Source: {source}"))
+                .size(12)
+                .color(Color::from_rgb8(148, 163, 184))
+        ]
+        .spacing(12);
+        for (index, connection) in self.imported_connections.iter().enumerate() {
+            let route = connection
+                .proxy_jump
+                .as_deref()
+                .map(|jump| format!("Via {jump}"))
+                .unwrap_or_else(|| "Direct connection".into());
+            connections = connections.push(
+                container(
+                    row![
+                        column![
+                            text(&connection.alias).size(18),
+                            text(connection.destination())
+                                .size(13)
+                                .color(Color::from_rgb8(148, 163, 184)),
+                            text(route).size(12).color(Color::from_rgb8(148, 163, 184)),
+                        ]
+                        .spacing(5)
+                        .width(Fill),
+                        button("Use connection")
+                            .style(button::primary)
+                            .on_press(Message::SelectImportedConnection(index)),
+                    ]
+                    .align_y(Alignment::Center),
+                )
+                .padding(16)
+                .width(Fill)
+                .style(container::rounded_box),
+            );
+        }
+
+        container(column![header, scrollable(connections).height(Fill)].spacing(24))
+            .padding(30)
+            .width(Fill)
+            .height(Fill)
+            .into()
     }
 
     fn logs_page(&self) -> Element<'_, Message> {
@@ -827,6 +964,7 @@ struct TunnelForm {
     target_host: String,
     target_port: String,
     identity_file: String,
+    proxy_jump: String,
     autostart: bool,
     error: Option<String>,
 }
@@ -845,6 +983,7 @@ impl Default for TunnelForm {
             target_host: "127.0.0.1".into(),
             target_port: String::new(),
             identity_file: String::new(),
+            proxy_jump: String::new(),
             autostart: false,
             error: None,
         }
@@ -869,8 +1008,20 @@ impl TunnelForm {
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_default(),
+            proxy_jump: tunnel.proxy_jump.clone().unwrap_or_default(),
             autostart: tunnel.autostart,
             error: None,
+        }
+    }
+
+    fn from_ssh_connection(connection: &SshConnection) -> Self {
+        Self {
+            name: connection.alias.clone(),
+            host: connection.alias.clone(),
+            user: connection.user.clone(),
+            ssh_port: connection.port.to_string(),
+            proxy_jump: connection.proxy_jump.clone().unwrap_or_default(),
+            ..Self::default()
         }
     }
 
@@ -884,6 +1035,8 @@ impl TunnelForm {
         };
         let identity_file = (!self.identity_file.trim().is_empty())
             .then(|| PathBuf::from(self.identity_file.trim()));
+        let proxy_jump =
+            (!self.proxy_jump.trim().is_empty()).then(|| self.proxy_jump.trim().to_string());
         let tunnel = TunnelConfig {
             id: self.editing.unwrap_or_else(Uuid::new_v4),
             name: self.name.trim().into(),
@@ -896,6 +1049,7 @@ impl TunnelForm {
             target_host: self.target_host.trim().into(),
             target_port: parse_port("Target port", &self.target_port)?,
             identity_file,
+            proxy_jump,
             autostart: self.autostart,
         };
         tunnel.validate()?;
