@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -17,6 +17,13 @@ pub enum ProcessEvent {
 pub struct RunningTunnel {
     pub child: Child,
     pub started_at: Instant,
+}
+
+#[derive(Debug)]
+pub struct TunnelExit {
+    pub id: Uuid,
+    pub result: Result<i32, String>,
+    pub runtime: Duration,
 }
 
 #[derive(Debug, Default)]
@@ -94,7 +101,7 @@ impl TunnelManager {
         }
     }
 
-    pub fn poll_exited(&mut self) -> Vec<(Uuid, Result<i32, String>)> {
+    pub fn poll_exited(&mut self) -> Vec<TunnelExit> {
         let ids: Vec<_> = self.running.keys().copied().collect();
         let mut exited = Vec::new();
         for id in ids {
@@ -106,9 +113,14 @@ impl TunnelManager {
                         Ok(None) => None,
                         Err(error) => Some(Err(error.to_string())),
                     });
-            if let Some(result) = result {
-                self.running.remove(&id);
-                exited.push((id, result));
+            if let Some(result) = result
+                && let Some(running) = self.running.remove(&id)
+            {
+                exited.push(TunnelExit {
+                    id,
+                    result,
+                    runtime: running.started_at.elapsed(),
+                });
             }
         }
         exited
@@ -187,6 +199,9 @@ mod tests {
             identity_file: None,
             proxy_jump: None,
             autostart: false,
+            auto_reconnect: true,
+            reconnect_attempts: crate::config::DEFAULT_RECONNECT_ATTEMPTS,
+            reconnect_interval_secs: crate::config::DEFAULT_RECONNECT_INTERVAL_SECS,
         }
     }
 

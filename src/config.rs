@@ -1,12 +1,18 @@
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-pub const CONFIG_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 3;
+pub const DEFAULT_RECONNECT_ATTEMPTS: u16 = 10;
+pub const DEFAULT_RECONNECT_INTERVAL_SECS: u16 = 5;
+pub const MAX_RECONNECT_ATTEMPTS: u16 = 20;
+pub const MAX_RECONNECT_INTERVAL_SECS: u16 = 5 * 60;
+pub const CONFIG_DIR_ENV: &str = "PORTWEAVE_CONFIG_DIR";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +68,12 @@ pub struct TunnelConfig {
     pub proxy_jump: Option<String>,
     #[serde(default)]
     pub autostart: bool,
+    #[serde(default = "default_true")]
+    pub auto_reconnect: bool,
+    #[serde(default = "default_reconnect_attempts")]
+    pub reconnect_attempts: u16,
+    #[serde(default = "default_reconnect_interval_secs")]
+    pub reconnect_interval_secs: u16,
 }
 
 impl TunnelConfig {
@@ -96,6 +108,18 @@ impl TunnelConfig {
         }
         if self.ssh_port == 0 || self.bind_port == 0 || self.target_port == 0 {
             return Err("端口必须介于 1 到 65535 之间".into());
+        }
+        if self.auto_reconnect && !(1..=MAX_RECONNECT_ATTEMPTS).contains(&self.reconnect_attempts) {
+            return Err(format!(
+                "重试次数必须介于 1 到 {MAX_RECONNECT_ATTEMPTS} 之间"
+            ));
+        }
+        if self.auto_reconnect
+            && !(1..=MAX_RECONNECT_INTERVAL_SECS).contains(&self.reconnect_interval_secs)
+        {
+            return Err(format!(
+                "初始重试间隔必须介于 1 到 {MAX_RECONNECT_INTERVAL_SECS} 秒之间"
+            ));
         }
         if let Some(proxy_jump) = self.proxy_jump.as_deref() {
             validate_proxy_jump(proxy_jump)?;
@@ -156,7 +180,8 @@ impl AppConfig {
             return Ok((Self::default(), path));
         }
         let bytes = fs::read(&path).map_err(ConfigError::Io)?;
-        let config = serde_json::from_slice(&bytes).map_err(ConfigError::Json)?;
+        let mut config: Self = serde_json::from_slice(&bytes).map_err(ConfigError::Json)?;
+        config.version = CONFIG_VERSION;
         Ok((config, path))
     }
 
@@ -189,6 +214,13 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 pub fn config_path() -> Result<PathBuf, ConfigError> {
+    config_path_from_override(std::env::var_os(CONFIG_DIR_ENV))
+}
+
+fn config_path_from_override(override_dir: Option<OsString>) -> Result<PathBuf, ConfigError> {
+    if let Some(directory) = override_dir.filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(directory).join("config.json"));
+    }
     ProjectDirs::from("dev", "PortWeave", "PortWeave")
         .map(|dirs| dirs.config_dir().join("config.json"))
         .ok_or(ConfigError::NoConfigDirectory)
@@ -210,6 +242,14 @@ const fn default_true() -> bool {
     true
 }
 
+const fn default_reconnect_attempts() -> u16 {
+    DEFAULT_RECONNECT_ATTEMPTS
+}
+
+const fn default_reconnect_interval_secs() -> u16 {
+    DEFAULT_RECONNECT_INTERVAL_SECS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +269,9 @@ mod tests {
             identity_file: None,
             proxy_jump: None,
             autostart: false,
+            auto_reconnect: true,
+            reconnect_attempts: DEFAULT_RECONNECT_ATTEMPTS,
+            reconnect_interval_secs: DEFAULT_RECONNECT_INTERVAL_SECS,
         }
     }
 
@@ -239,6 +282,7 @@ mod tests {
             ..AppConfig::default()
         };
         let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("notify_on_retry_failure"));
         let loaded: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded.tunnels, config.tunnels);
     }
@@ -272,6 +316,68 @@ mod tests {
         assert_eq!(
             tunnel.validate().unwrap_err(),
             "跳板机必须使用英文逗号分隔，且不能包含空格"
+        );
+    }
+
+    #[test]
+    fn old_configs_receive_reconnect_defaults() {
+        let json = r#"{
+            "version": 1,
+            "tunnels": [{
+                "id": "00000000-0000-0000-0000-000000000000",
+                "name": "legacy",
+                "host": "example.com",
+                "user": "developer",
+                "ssh_port": 22,
+                "kind": "remote",
+                "bind_address": "127.0.0.1",
+                "bind_port": 7897,
+                "target_host": "127.0.0.1",
+                "target_port": 7897,
+                "autostart": false
+            }],
+            "minimize_to_tray": true,
+            "start_minimized": false,
+            "notify_on_retry_failure": false
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        let tunnel = &config.tunnels[0];
+        assert!(tunnel.auto_reconnect);
+        assert_eq!(tunnel.reconnect_attempts, 10);
+        assert_eq!(
+            tunnel.reconnect_interval_secs,
+            DEFAULT_RECONNECT_INTERVAL_SECS
+        );
+    }
+
+    #[test]
+    fn validates_reconnect_limits_when_enabled() {
+        let mut tunnel = sample();
+        tunnel.reconnect_attempts = 0;
+        assert_eq!(
+            tunnel.validate().unwrap_err(),
+            "重试次数必须介于 1 到 20 之间"
+        );
+
+        tunnel.reconnect_attempts = DEFAULT_RECONNECT_ATTEMPTS;
+        tunnel.reconnect_interval_secs = 0;
+        assert_eq!(
+            tunnel.validate().unwrap_err(),
+            "初始重试间隔必须介于 1 到 300 秒之间"
+        );
+
+        tunnel.auto_reconnect = false;
+        assert!(tunnel.validate().is_ok());
+    }
+
+    #[test]
+    fn supports_an_isolated_config_directory_override() {
+        let path = config_path_from_override(Some(OsString::from("C:/isolated-portweave")))
+            .expect("override path should not require ProjectDirs");
+        assert_eq!(
+            path,
+            PathBuf::from("C:/isolated-portweave").join("config.json")
         );
     }
 }

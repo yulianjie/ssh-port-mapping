@@ -11,14 +11,19 @@ use iced::widget::{
 use iced::{
     Alignment, Color, Element, Fill, Length, Size, Subscription, Task, Theme, event, time, window,
 };
-use portweave::config::{AppConfig, ForwardKind, TunnelConfig, config_path};
+use portweave::config::{
+    AppConfig, DEFAULT_RECONNECT_ATTEMPTS, DEFAULT_RECONNECT_INTERVAL_SECS, ForwardKind,
+    TunnelConfig, config_path,
+};
+use portweave::notification::{self, NotificationEvent};
+use portweave::reconnect::{ReconnectTracker, RetryDecision};
 use portweave::ssh::{ProcessEvent, TunnelManager};
 use portweave::ssh_config::{SshConfigImport, SshConnection, import_default_ssh_config};
 use portweave::startup;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const APP_NAME: &str = "PortWeave";
@@ -88,8 +93,12 @@ enum Message {
     IdentityFileChanged(String),
     ProxyJumpChanged(String),
     AutostartChanged(bool),
+    AutoReconnectChanged(bool),
+    ReconnectAttemptsChanged(String),
+    ReconnectIntervalChanged(String),
     MinimizeToTrayChanged(bool),
     StartMinimizedChanged(bool),
+    TestNotification,
     LaunchAtLoginChanged(bool),
     Quit,
 }
@@ -102,6 +111,9 @@ struct PortWeave {
     manager: TunnelManager,
     event_tx: Sender<ProcessEvent>,
     event_rx: Receiver<ProcessEvent>,
+    notification_tx: Sender<NotificationEvent>,
+    notification_rx: Receiver<NotificationEvent>,
+    reconnect: ReconnectTracker,
     logs: VecDeque<String>,
     errors: HashMap<Uuid, String>,
     banner: Option<String>,
@@ -119,6 +131,7 @@ struct PortWeave {
 impl PortWeave {
     fn boot(tray_available: bool, tray_error: Option<String>) -> (Self, Task<Message>) {
         let (event_tx, event_rx) = mpsc::channel();
+        let (notification_tx, notification_rx) = mpsc::channel();
         let (config, config_path, config_error) = match AppConfig::load() {
             Ok((config, path)) => (config, path, None),
             Err(error) => (
@@ -144,6 +157,9 @@ impl PortWeave {
             manager: TunnelManager::default(),
             event_tx,
             event_rx,
+            notification_tx,
+            notification_rx,
+            reconnect: ReconnectTracker::default(),
             logs: VecDeque::new(),
             errors: HashMap::new(),
             banner,
@@ -300,6 +316,13 @@ impl PortWeave {
             Message::IdentityFileChanged(value) => self.form.identity_file = value,
             Message::ProxyJumpChanged(value) => self.form.proxy_jump = value,
             Message::AutostartChanged(value) => self.form.autostart = value,
+            Message::AutoReconnectChanged(value) => self.form.auto_reconnect = value,
+            Message::ReconnectAttemptsChanged(value) => {
+                self.form.reconnect_attempts = digits_only(value)
+            }
+            Message::ReconnectIntervalChanged(value) => {
+                self.form.reconnect_interval_secs = digits_only(value)
+            }
             Message::MinimizeToTrayChanged(value) => {
                 self.config.minimize_to_tray = value;
                 self.save_config();
@@ -307,6 +330,19 @@ impl PortWeave {
             Message::StartMinimizedChanged(value) => {
                 self.config.start_minimized = value;
                 self.save_config();
+            }
+            Message::TestNotification => {
+                match notification::show_failure(
+                    "PortWeave 测试通知".into(),
+                    "自动重连全部失败时，PortWeave 将强制发送 Windows 系统通知。".into(),
+                    self.notification_tx.clone(),
+                ) {
+                    Ok(()) => self.push_log("已请求发送测试通知。"),
+                    Err(error) => {
+                        self.push_log(format!("测试通知发送失败：{error}"));
+                        self.banner = Some(format!("测试通知发送失败：{error}"));
+                    }
+                }
             }
             Message::LaunchAtLoginChanged(value) => match startup::set_enabled(value) {
                 Ok(()) => {
@@ -334,18 +370,30 @@ impl PortWeave {
             }
         }
 
-        for (id, result) in self.manager.poll_exited() {
-            let name = self.tunnel_name(id);
-            match result {
-                Ok(code) => {
-                    let message = format!("SSH 已退出，代码为 {code}");
-                    self.errors.insert(id, message.clone());
-                    self.push_log(format!("[{name}] {message}。"));
-                }
-                Err(error) => {
-                    self.errors.insert(id, error.clone());
-                    self.push_log(format!("[{name}] 无法检查 SSH 进程：{error}"));
-                }
+        for exited in self.manager.poll_exited() {
+            let failure = match exited.result {
+                Ok(code) => format!("SSH 已退出，代码为 {code}"),
+                Err(error) => format!("无法检查 SSH 进程：{error}"),
+            };
+            self.handle_disconnect(exited.id, exited.runtime, failure);
+        }
+
+        let now = Instant::now();
+        for (id, attempt) in self.reconnect.take_due(now) {
+            let should_retry = self
+                .config
+                .tunnels
+                .iter()
+                .any(|tunnel| tunnel.id == id && tunnel.auto_reconnect);
+            if should_retry {
+                self.start_tunnel_attempt(id, Some(attempt));
+            }
+        }
+
+        while let Ok(event) = self.notification_rx.try_recv() {
+            match event {
+                NotificationEvent::Shown => self.push_log("已发送 Windows 系统通知。"),
+                NotificationEvent::Failed(error) => self.report_notification_error(error),
             }
         }
 
@@ -357,27 +405,71 @@ impl PortWeave {
     }
 
     fn start_tunnel(&mut self, id: Uuid) {
-        let Some(config) = self.config.tunnels.iter().find(|tunnel| tunnel.id == id) else {
+        self.reconnect.cancel(id);
+        self.start_tunnel_attempt(id, None);
+    }
+
+    fn start_tunnel_attempt(&mut self, id: Uuid, retry_attempt: Option<u16>) {
+        let Some(config) = self
+            .config
+            .tunnels
+            .iter()
+            .find(|tunnel| tunnel.id == id)
+            .cloned()
+        else {
             return;
         };
         let name = config.name.clone();
-        match self.manager.start(config, self.event_tx.clone()) {
+        match self.manager.start(&config, self.event_tx.clone()) {
             Ok(pid) => {
+                self.reconnect.mark_started(id, retry_attempt);
                 self.errors.remove(&id);
-                self.push_log(format!("[{name}] 已启动 SSH 进程 {pid}。"));
+                if let Some(attempt) = retry_attempt {
+                    self.push_log(format!(
+                        "[{name}] 第 {attempt}/{} 次自动重连已启动 SSH 进程 {pid}。",
+                        config.reconnect_attempts
+                    ));
+                } else {
+                    self.push_log(format!("[{name}] 已启动 SSH 进程 {pid}。"));
+                }
             }
             Err(error) => {
-                self.errors.insert(id, error.clone());
-                self.banner = Some(format!("无法启动“{name}”：{error}"));
-                self.push_log(format!("[{name}] 启动失败：{error}"));
+                let failed_attempt = retry_attempt.unwrap_or(0);
+                self.push_log(if let Some(attempt) = retry_attempt {
+                    format!(
+                        "[{name}] 第 {attempt}/{} 次自动重连启动失败：{error}",
+                        config.reconnect_attempts
+                    )
+                } else {
+                    format!("[{name}] 启动失败：{error}")
+                });
+                if config.auto_reconnect {
+                    let decision = self.reconnect.after_start_failure(
+                        id,
+                        failed_attempt,
+                        config.reconnect_attempts,
+                        Duration::from_secs(u64::from(config.reconnect_interval_secs)),
+                        Instant::now(),
+                    );
+                    self.apply_retry_decision(&config, error, decision);
+                } else {
+                    self.errors.insert(id, error.clone());
+                    self.banner = Some(format!("无法启动“{name}”：{error}"));
+                }
             }
         }
     }
 
     fn stop_tunnel(&mut self, id: Uuid) {
         let name = self.tunnel_name(id);
+        let was_reconnecting = self.reconnect.contains(id);
+        self.reconnect.cancel(id);
+        self.errors.remove(&id);
         match self.manager.stop(id) {
             Ok(true) => self.push_log(format!("[{name}] 已停止。")),
+            Ok(false) if was_reconnecting => {
+                self.push_log(format!("[{name}] 已取消自动重连。"));
+            }
             Ok(false) => {}
             Err(error) => {
                 self.banner = Some(error.clone());
@@ -386,11 +478,82 @@ impl PortWeave {
         }
     }
 
+    fn handle_disconnect(&mut self, id: Uuid, runtime: Duration, failure: String) {
+        let Some(config) = self
+            .config
+            .tunnels
+            .iter()
+            .find(|tunnel| tunnel.id == id)
+            .cloned()
+        else {
+            self.reconnect.cancel(id);
+            return;
+        };
+
+        if config.auto_reconnect {
+            let decision = self.reconnect.after_exit(
+                id,
+                config.reconnect_attempts,
+                Duration::from_secs(u64::from(config.reconnect_interval_secs)),
+                runtime,
+                Instant::now(),
+            );
+            self.apply_retry_decision(&config, failure, decision);
+        } else {
+            self.errors.insert(id, failure.clone());
+            self.push_log(format!("[{}] {failure}。", config.name));
+        }
+    }
+
+    fn apply_retry_decision(
+        &mut self,
+        config: &TunnelConfig,
+        failure: String,
+        decision: RetryDecision,
+    ) {
+        match decision {
+            RetryDecision::Scheduled { attempt, delay } => {
+                let message = format!(
+                    "{failure}；{} 秒后自动重连（{attempt}/{}）",
+                    delay.as_secs(),
+                    config.reconnect_attempts
+                );
+                self.errors.insert(config.id, message.clone());
+                self.push_log(format!("[{}] {message}。", config.name));
+            }
+            RetryDecision::Exhausted { attempts } => {
+                let message = format!("自动重连 {attempts} 次均失败：{failure}");
+                self.errors.insert(config.id, message.clone());
+                self.banner = Some(format!("“{}”{message}", config.name));
+                self.push_log(format!("[{}] {message}", config.name));
+                self.notify_retry_failure(&config.name, attempts, &failure);
+            }
+        }
+    }
+
+    fn notify_retry_failure(&mut self, name: &str, attempts: u16, failure: &str) {
+        let title = format!("PortWeave：{name} 重连失败");
+        let message = format!("已尝试 {attempts} 次。{failure}");
+        if let Err(error) = notification::show_failure(title, message, self.notification_tx.clone())
+        {
+            self.report_notification_error(error);
+        }
+    }
+
+    fn report_notification_error(&mut self, error: String) {
+        let notification_error = format!("系统通知发送失败：{error}");
+        self.push_log(&notification_error);
+        self.banner = Some(match self.banner.take() {
+            Some(existing) => format!("{existing}；{notification_error}"),
+            None => notification_error,
+        });
+    }
+
     fn save_tunnel(&mut self) {
         match self.form.to_tunnel() {
             Ok(tunnel) => {
                 let id = tunnel.id;
-                if self.manager.is_running(id) {
+                if self.manager.is_running(id) || self.reconnect.contains(id) {
                     self.stop_tunnel(id);
                     self.push_log(format!("[{}] 配置已更改，因此已停止。", tunnel.name));
                 }
@@ -594,11 +757,31 @@ impl PortWeave {
 
     fn tunnel_card<'a>(&'a self, tunnel: &'a TunnelConfig) -> Element<'a, Message> {
         let running = self.manager.is_running(tunnel.id);
-        let (status, status_color) = if running {
+        let pending_retry = self.reconnect.pending(tunnel.id);
+        let (status, status_color) = if let Some(retry) = pending_retry {
+            let remaining = retry
+                .due_at
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .div_ceil(1_000)
+                .max(1);
             (
                 format!(
-                    "运行中 · PID {}",
-                    self.manager.pid(tunnel.id).unwrap_or_default()
+                    "等待自动重连 · {remaining} 秒 · {}/{}",
+                    retry.attempt, tunnel.reconnect_attempts
+                ),
+                Color::from_rgb8(250, 204, 21),
+            )
+        } else if running {
+            let recovery = self
+                .reconnect
+                .active_attempt(tunnel.id)
+                .map(|attempt| format!(" · 第 {attempt} 次重连已启动"))
+                .unwrap_or_default();
+            (
+                format!(
+                    "运行中 · PID {}{recovery}",
+                    self.manager.pid(tunnel.id).unwrap_or_default(),
                 ),
                 Color::from_rgb8(74, 222, 128),
             )
@@ -610,6 +793,10 @@ impl PortWeave {
 
         let action = if running {
             button("停止")
+                .style(button::danger)
+                .on_press(Message::Stop(tunnel.id))
+        } else if pending_retry.is_some() {
+            button("取消重试")
                 .style(button::danger)
                 .on_press(Message::Stop(tunnel.id))
         } else {
@@ -660,12 +847,25 @@ impl PortWeave {
         let destination = tunnel.destination();
         let mapping = tunnel.mapping();
         let jump = tunnel.proxy_jump.as_deref().unwrap_or("直连");
+        let automation = if tunnel.auto_reconnect {
+            format!(
+                "启动：{} · 重连：{} 次 / {} 秒起递增",
+                if tunnel.autostart { "开" } else { "关" },
+                tunnel.reconnect_attempts,
+                tunnel.reconnect_interval_secs
+            )
+        } else {
+            format!(
+                "启动：{} · 重连：关",
+                if tunnel.autostart { "开" } else { "关" }
+            )
+        };
         let details = row![
             detail("服务器", destination),
             detail("连接方式", jump),
             detail("模式", tunnel.kind.label()),
             detail("端口映射", mapping),
-            detail("自动启动", if tunnel.autostart { "开" } else { "关" }),
+            detail("自动化", automation),
         ]
         .spacing(30);
 
@@ -777,7 +977,39 @@ impl PortWeave {
             .spacing(14),
         );
 
-        let mut form = column![self.page_header(title, subtitle), connection, mapping].spacing(18);
+        let recovery = section(
+            "断线恢复",
+            column![
+                checkbox(self.form.auto_reconnect)
+                    .label("SSH 异常退出或启动失败后自动重连")
+                    .on_toggle(Message::AutoReconnectChanged),
+                row![
+                    field(
+                        "最大重试次数",
+                        text_input("10", &self.form.reconnect_attempts)
+                            .on_input(Message::ReconnectAttemptsChanged)
+                    ),
+                    field(
+                        "初始重试间隔（秒）",
+                        text_input("5", &self.form.reconnect_interval_secs)
+                            .on_input(Message::ReconnectIntervalChanged)
+                    ),
+                ]
+                .spacing(12),
+                text("第 1 次按初始间隔等待，之后每次翻倍，单次最长 5 分钟；手动停止会取消重试。连接稳定运行 30 秒后会重置次数。")
+                    .size(12)
+                    .color(Color::from_rgb8(148, 163, 184)),
+            ]
+            .spacing(14),
+        );
+
+        let mut form = column![
+            self.page_header(title, subtitle),
+            connection,
+            mapping,
+            recovery
+        ]
+        .spacing(18);
         if let Some(error) = self.form.error.as_deref() {
             form = form.push(text(error).size(13).color(Color::from_rgb8(248, 113, 113)));
         }
@@ -905,6 +1137,14 @@ impl PortWeave {
         } else {
             start_hidden_checkbox
         };
+        let failure_notification = row![
+            text("自动重连全部失败后始终发送 Windows 系统通知").width(Fill),
+            button("发送测试通知")
+                .style(button::secondary)
+                .on_press(Message::TestNotification),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
 
         let behavior = section(
             "应用行为",
@@ -912,6 +1152,7 @@ impl PortWeave {
                 launch_checkbox,
                 minimize_checkbox,
                 start_hidden_checkbox,
+                failure_notification,
                 text(if self.launch_at_login_supported {
                     "开机启动仅对当前 Windows 用户生效；移动程序后请重新关闭再开启此选项。"
                 } else {
@@ -958,17 +1199,19 @@ impl PortWeave {
             .spacing(10),
         );
 
-        container(
-            column![
-                self.page_header("设置", "轻量设计，默认保护隐私"),
-                behavior,
-                storage,
-                about
-            ]
-            .spacing(18),
+        scrollable(
+            container(
+                column![
+                    self.page_header("设置", "轻量设计，默认保护隐私"),
+                    behavior,
+                    storage,
+                    about
+                ]
+                .spacing(18),
+            )
+            .padding(30)
+            .max_width(900),
         )
-        .padding(30)
-        .max_width(900)
         .into()
     }
 }
@@ -988,6 +1231,9 @@ struct TunnelForm {
     identity_file: String,
     proxy_jump: String,
     autostart: bool,
+    auto_reconnect: bool,
+    reconnect_attempts: String,
+    reconnect_interval_secs: String,
     error: Option<String>,
 }
 
@@ -1007,6 +1253,9 @@ impl Default for TunnelForm {
             identity_file: String::new(),
             proxy_jump: String::new(),
             autostart: false,
+            auto_reconnect: true,
+            reconnect_attempts: DEFAULT_RECONNECT_ATTEMPTS.to_string(),
+            reconnect_interval_secs: DEFAULT_RECONNECT_INTERVAL_SECS.to_string(),
             error: None,
         }
     }
@@ -1032,6 +1281,9 @@ impl TunnelForm {
                 .unwrap_or_default(),
             proxy_jump: tunnel.proxy_jump.clone().unwrap_or_default(),
             autostart: tunnel.autostart,
+            auto_reconnect: tunnel.auto_reconnect,
+            reconnect_attempts: tunnel.reconnect_attempts.to_string(),
+            reconnect_interval_secs: tunnel.reconnect_interval_secs.to_string(),
             error: None,
         }
     }
@@ -1059,6 +1311,25 @@ impl TunnelForm {
             .then(|| PathBuf::from(self.identity_file.trim()));
         let proxy_jump =
             (!self.proxy_jump.trim().is_empty()).then(|| self.proxy_jump.trim().to_string());
+        let (reconnect_attempts, reconnect_interval_secs) = if self.auto_reconnect {
+            (
+                self.reconnect_attempts
+                    .parse::<u16>()
+                    .map_err(|_| "请输入有效的重试次数".to_string())?,
+                self.reconnect_interval_secs
+                    .parse::<u16>()
+                    .map_err(|_| "请输入有效的初始重试间隔".to_string())?,
+            )
+        } else {
+            (
+                self.reconnect_attempts
+                    .parse::<u16>()
+                    .unwrap_or(DEFAULT_RECONNECT_ATTEMPTS),
+                self.reconnect_interval_secs
+                    .parse::<u16>()
+                    .unwrap_or(DEFAULT_RECONNECT_INTERVAL_SECS),
+            )
+        };
         let tunnel = TunnelConfig {
             id: self.editing.unwrap_or_else(Uuid::new_v4),
             name: self.name.trim().into(),
@@ -1073,6 +1344,9 @@ impl TunnelForm {
             identity_file,
             proxy_jump,
             autostart: self.autostart,
+            auto_reconnect: self.auto_reconnect,
+            reconnect_attempts,
+            reconnect_interval_secs,
         };
         tunnel.validate()?;
         Ok(tunnel)
