@@ -62,25 +62,12 @@ mod platform {
     }
 
     fn create_icon() -> Result<Icon, String> {
-        const SIZE: u32 = 32;
-        let mut rgba = vec![0_u8; (SIZE * SIZE * 4) as usize];
-        for y in 0..SIZE {
-            for x in 0..SIZE {
-                let index = ((y * SIZE + x) * 4) as usize;
-                let dx = x as i32 - 15;
-                let dy = y as i32 - 15;
-                if dx * dx + dy * dy <= 14 * 14 {
-                    rgba[index..index + 4].copy_from_slice(&[47, 129, 247, 255]);
-                }
-                let left_link = (7..=15).contains(&x) && (13..=18).contains(&y);
-                let right_link = (16..=24).contains(&x) && (13..=18).contains(&y);
-                let bridge = (13..=18).contains(&x) && (10..=21).contains(&y);
-                if left_link || right_link || bridge {
-                    rgba[index..index + 4].copy_from_slice(&[239, 246, 255, 255]);
-                }
-            }
-        }
-        Icon::from_rgba(rgba, SIZE, SIZE).map_err(|error| error.to_string())
+        Icon::from_rgba(
+            crate::icon::RGBA.to_vec(),
+            crate::icon::SIZE,
+            crate::icon::SIZE,
+        )
+        .map_err(|error| error.to_string())
     }
 }
 

@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod icon;
 mod tray;
 
 use iced::widget::{
@@ -44,6 +45,10 @@ fn main() -> iced::Result {
     .title(APP_NAME)
     .theme(PortWeave::theme)
     .subscription(PortWeave::subscription)
+    .window(window::Settings {
+        icon: Some(icon::window_icon()),
+        ..Default::default()
+    })
     .window_size(Size::new(1120.0, 720.0))
     .centered()
     .exit_on_close_request(false)

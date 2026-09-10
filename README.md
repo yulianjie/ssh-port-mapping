@@ -81,6 +81,24 @@ ssh -N -T -o ExitOnForwardFailure=yes -o BatchMode=yes `
 
 ## 运行
 
+### 应用图标
+
+窗口、系统托盘和 Windows EXE 使用统一的 PortWeave 图标，并在编译时内嵌，
+运行时无需携带 `assets` 目录。SVG 源文件为 `assets/portweave.svg`，
+Windows 图标为 `assets/portweave.ico`（16–256px，共 9 档尺寸）。
+
+修改 SVG 后，运行以下命令同步生成 ICO、PNG、预览和窗口/托盘使用的 RGBA 数据，
+然后重新构建应用。生成文件应一并提交；正常 Rust 构建无需 Python。
+
+```powershell
+python -m pip install resvg-py==0.5.0 Pillow
+python scripts/convert_icon.py
+```
+
+Windows 构建通过 `winresource` 调用 Windows SDK 资源编译器嵌入 ICO。
+
+### 环境要求
+
 要求：
 
 - Windows 10/11
