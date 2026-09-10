@@ -16,20 +16,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --release --locked
-      - name: Package
+      - name: Install Inno Setup
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path dist/PortWeave | Out-Null
-          Copy-Item target/release/portweave.exe dist/PortWeave/
-          Copy-Item README.md,LICENSE dist/PortWeave/
-          Compress-Archive -Path dist/PortWeave -DestinationPath dist/PortWeave-windows-x86_64.zip
-          $hash = (Get-FileHash dist/PortWeave-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash *PortWeave-windows-x86_64.zip" | Set-Content dist/SHA256SUMS.txt -Encoding utf8NoBOM
+        run: choco install innosetup --version=6.4.3 --yes --no-progress --allow-downgrade
+      - name: Package installer and portable archive
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/package-windows.ps1 -ReleaseTag $env:RELEASE_TAG
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           name: PortWeave ${{ github.ref_name }}
           files: |
+            dist/PortWeave-*-windows-x86_64-Setup.exe
             dist/PortWeave-windows-x86_64.zip
             dist/SHA256SUMS.txt
           generate_release_notes: true
+          fail_on_unmatched_files: true

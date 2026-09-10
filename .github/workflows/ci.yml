@@ -25,3 +25,39 @@ jobs:
         run: cargo test --all-targets
       - name: Build release binary
         run: cargo build --release --locked
+      - name: Install Inno Setup
+        run: choco install innosetup --version=6.4.3 --yes --no-progress --allow-downgrade
+      - name: Package installer and portable archive
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+      - name: Smoke test install, upgrade and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Get-ChildItem dist/*-Setup.exe).FullName
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs/PortWeave'
+          $shortcut = Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs/PortWeave.lnk'
+          $configDir = Join-Path $env:APPDATA 'PortWeave/PortWeave/config'
+          New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+          $config = Join-Path $configDir 'installer-smoke-test.txt'
+          Set-Content $config 'preserve user data'
+          foreach ($phase in @('install', 'upgrade')) {
+            $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS=no' -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "$phase failed: $($process.ExitCode)" }
+            if (-not (Test-Path "$installDir/portweave.exe")) { throw "$phase missing executable" }
+            if (-not (Test-Path $shortcut)) { throw "$phase missing shortcut" }
+          }
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          New-Item -Path $runKey -Force | Out-Null
+          New-ItemProperty -Path $runKey -Name PortWeave -Value ('"' + "$installDir\portweave.exe" + '"') -PropertyType String -Force | Out-Null
+          $process = Start-Process -FilePath "$installDir/unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Uninstall failed: $($process.ExitCode)" }
+          if (Test-Path "$installDir/portweave.exe") { throw 'Uninstall left executable' }
+          if (Test-Path $shortcut) { throw 'Uninstall left shortcut' }
+          if (Get-ItemProperty -Path $runKey -Name PortWeave -ErrorAction SilentlyContinue) { throw 'Uninstall left startup entry' }
+          if ((Get-Content $config) -ne 'preserve user data') { throw 'User data was not preserved' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PortWeave-windows-packages
+          path: dist/*.*
+          if-no-files-found: error

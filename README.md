@@ -81,6 +81,22 @@ ssh -N -T -o ExitOnForwardFailure=yes -o BatchMode=yes `
 
 ## 运行
 
+### Windows 安装包（推荐）
+
+在 [GitHub Releases](https://github.com/yulianjie/ssh-port-mapping/releases) 下载
+`PortWeave-<版本>-windows-x86_64-Setup.exe`，双击进入安装向导。
+安装到当前用户的 `%LOCALAPPDATA%\Programs\PortWeave`，无需管理员权限，
+创建开始菜单入口，并可选择创建桌面快捷方式。安装后可从开始菜单启动，
+在 Windows **设置 → 应用 → 已安装的应用** 中卸载。
+
+升级前请从托盘菜单退出 PortWeave（关闭窗口只会最小化到托盘），然后运行新版安装包。
+升级与卸载均保留用户配置；卸载会移除指向该安装位置的开机启动项。
+从便携版迁移后，如需开机启动，请在安装版设置中重新启用该选项。
+安装包不捆绑 OpenSSH，仍需满足下方环境要求。
+
+`PortWeave-windows-x86_64.zip` 是可选的免安装便携版。
+`SHA256SUMS.txt` 同时提供安装包与 ZIP 的 SHA-256 校验值。
+
 ### 应用图标
 
 窗口、系统托盘和 Windows EXE 使用统一的 PortWeave 图标，并在编译时内嵌，
@@ -164,6 +180,17 @@ Windows 系统通知；此行为没有关闭开关，即使主窗口已经隐藏
 - 退出应用时会停止所有由本次 PortWeave 会话创建的 SSH 子进程。
 
 ## 开发与验证
+
+Windows 安装包使用 Inno Setup 6（CI 固定为 6.4.3）：
+
+```powershell
+cargo build --release --locked --target-dir target/installer-build
+./scripts/package-windows.ps1 -BinaryDir target/installer-build/release
+```
+
+默认输出到 `dist/`。可通过 `-IsccPath` 指定 `ISCC.exe`，通过 `-OutputDir`
+指定输出目录。CI 编译并保存安装包和便携包；推送与 Cargo 版本一致的 `v*` 标签
+时，Release 工作流自动发布两种包和校验文件。安装向导目前为英文。
 
 ```powershell
 cargo fmt --all -- --check
