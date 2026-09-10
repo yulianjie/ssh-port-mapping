@@ -181,7 +181,7 @@ Windows 系统通知；此行为没有关闭开关，即使主窗口已经隐藏
 
 ## 开发与验证
 
-Windows 安装包使用 Inno Setup 6（CI 固定为 6.4.3）：
+Windows 安装包使用 Inno Setup 6（CI 固定为 6.7.3）：
 
 ```powershell
 cargo build --release --locked --target-dir target/installer-build

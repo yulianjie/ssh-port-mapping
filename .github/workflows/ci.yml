@@ -26,7 +26,7 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --yes --no-progress --allow-downgrade
+        run: ./scripts/install-inno-ci.ps1
       - name: Package installer and portable archive
         shell: pwsh
         run: ./scripts/package-windows.ps1
